@@ -23,7 +23,19 @@ jobs:
       - name: دریافت کد مخزن
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
+
+      - name: پاکسازی فایل‌های قدیمی
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # حذف فایل‌های آرشیو از گیت و دیسک
+          if ls archive.7z.* 1> /dev/null 2>&1; then
+            git rm -f archive.7z.*
+            git commit -m "Cleanup: Removing old archive files"
+            git push
+          fi
+          rm -f archive.7z.*
 
       - name: نصب 7z
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
@@ -31,47 +43,35 @@ jobs:
       - name: دانلود فایل از لینک
         run: |
           curl -L --fail --retry 3 -o downloaded_file "${{ github.event.inputs.file_url }}"
-          ls -lh downloaded_file
 
-      - name: استخراج نام اصلی فایل (اختیاری)
-        run: |
-          ORIGINAL_NAME=$(basename "${{ github.event.inputs.file_url }}" | cut -d '?' -f1)
-          [ -z "$ORIGINAL_NAME" ] && ORIGINAL_NAME="downloaded_file"
-          echo "ORIGINAL_NAME=$ORIGINAL_NAME" >> $GITHUB_ENV
-
-      - name: ساخت آرشیو رمزدار چندتکه (هر تکه ۹۵ مگابایت)
+      - name: ساخت آرشیو رمزدار چندتکه
         run: |
           7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=3 -v95m "archive.7z" downloaded_file
 
       - name: حذف فایل اصلی
         run: rm -f downloaded_file
 
-      - name: Commit و Push مرحله‌ای تکه‌ها (هر بار ۱۰ تکه)
+      - name: Commit و Push مرحله‌ای تکه‌ها
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # لیست تمام تکه‌ها
           chunks=(archive.7z.*)
           total=${#chunks[@]}
-          batch_size=10  # هر بار ۱۰ تکه
+          batch_size=10
           start=0
           
-          while [ $start -lt $total ]; do
-            end=$((start + batch_size - 1))
-            [ $end -ge $total ] && end=$((total - 1))
+          while[ $start -lt $total ]; do
+            end=$((start + batch_size - 1))[ $end -ge $total ] && end=$((total - 1))
             
             echo "Pushing chunks $start to $end ..."
             
-            # افزودن تکه‌های این بسته
             for i in $(seq $start $end); do
               git add "${chunks[$i]}"
             done
             
-            # commit (با پیام حاوی محدوده)
             git commit -m "Add chunks $((start+1))-$((end+1)) of $total"
             
-            # push با حداکثر تلاش ۵ بار
             for attempt in {1..5}; do
               if git push; then
                 echo "Push successful"
@@ -83,6 +83,5 @@ jobs:
             done
             
             start=$((end + 1))
-            # کمی صبر بین بسته‌ها
             sleep 5
           done
