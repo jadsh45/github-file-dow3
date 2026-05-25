@@ -1,1 +1,104 @@
-1
+name: دانلود فایل دلخواه شما با نت ملی
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: 'لینک مستقیم فایل مورد نظر'
+        required: true
+        type: string
+      zip_password:
+        description: 'رمز عبور برای فایل ZIP'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  download-and-split:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: دریافت کد مخزن
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: تنظیم Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: پاکسازی فایل‌های قدیمی
+        run: |
+          if git ls-files | grep -q '^archive\.7z\.'; then
+            git rm -f archive.7z.*
+            git commit -m "Cleanup: Removing old archive files" || echo "No old files to cleanup"
+          fi
+          rm -f archive.7z.*
+
+      - name: نصب 7-Zip
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: دانلود فایل
+        run: |
+          echo "📥 در حال دانلود فایل..."
+          curl -L --fail --retry 6 --retry-delay 10 \
+               -o downloaded_file "${{ github.event.inputs.file_url }}"
+          echo "✅ دانلود با موفقیت انجام شد."
+
+      - name: ساخت آرشیو رمزدار چند قسمتی
+        run: |
+          echo "🗜️ در حال ساخت آرشیو رمزدار..."
+          7z a -p"${{ github.event.inputs.zip_password }}" \
+               -mhe=on \
+               -mx=5 \
+               -v95m "archive.7z" downloaded_file
+          echo "✅ آرشیو با موفقیت ساخته شد."
+
+      - name: حذف فایل اصلی دانلود شده
+        run: rm -f downloaded_file
+
+      - name: Commit و Push مرحله‌ای تکه‌ها
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          chunks=(archive.7z.*)
+          total=${#chunks[@]}
+          batch_size=8
+
+          if [ "$total" -eq 0 ]; then
+            echo "⚠️ هیچ فایل آرشیوی پیدا نشد!"
+            exit 1
+          fi
+
+          echo "📦 تعداد کل تکه‌ها: $total"
+
+          for ((start = 0; start < total; start += batch_size)); do
+            end=$((start + batch_size - 1))
+            [ $end -ge $total ] && end=$((total - 1))
+
+            echo "📤 در حال Push تکه‌های $((start+1)) تا $((end+1)) از $total ..."
+
+            for i in $(seq $start $end); do
+              git add "${chunks[$i]}"
+            done
+
+            git commit -m "Add archive chunks $((start+1))-$((end+1))/$total" || echo "✅ No changes to commit"
+
+            for attempt in {1..5}; do
+              if git push; then
+                echo "✅ Push موفق بود"
+                break
+              else
+                echo "❌ Push ناموفق (تلاش $attempt/5) - تلاش مجدد..."
+                sleep 12
+              fi
+            done
+
+            sleep 3
+          done
+
+          echo "🎉 تمام تکه‌ها با موفقیت آپلود شدند."
